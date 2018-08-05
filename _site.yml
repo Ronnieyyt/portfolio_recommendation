@@ -1,0 +1,9 @@
+name: "portfolio-recommendation"
+output_dir: "."
+navbar:
+  title: "portfolio recommendation"
+  left:
+    - text: "Home"
+      href: index.html
+    - text: "About Me"
+      href: about.html
