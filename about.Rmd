@@ -2,3 +2,10 @@
 title: "About Me"
 ---
 
+- __Name:__ Yuting YANG
+- __Ocupation:__ "Student"
+- __Project:__ financial portfolio optimization
+- __Tutor:__ Nico Roedder
+
+
+

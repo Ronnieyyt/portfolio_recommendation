@@ -1,5 +1,225 @@
 ---
 title: "portfolio recommendation"
+author: Yuting Yang
+output: html_document
+runtime: shiny
 ---
 
-Hello, World!
+
+```{r global_options, include=FALSE}
+ knitr::opts_chunk$set(fig.align='center',
+                      echo=FALSE, warning=FALSE, message=FALSE)
+#rmarkdown::render_site()
+```
+
+
+
+```{r, echo = FALSE, fig.align='center'}
+# Before you run the whole project 
+# The most important thing you have to do is setting the project path in your computer 
+
+#import functions
+library(ggplot2)
+library(shinydashboard)
+library(Metrics) #evaluation
+library(caret) # confusion matrix
+#install.packages("portfolio.r")
+library(fPortfolio)
+#install.packages("IntroCompFinR", repos="http://R-Forge.R-project.org")
+library(IntroCompFinR)
+library(PerformanceAnalytics)
+library(dygraphs)
+library(shiny)
+library(highcharter)
+
+#data: obtain dataset
+source("./data/get_return.R")
+source("./data/add_branch.R")
+source("./data/get_weekly_return.R")
+
+#lib: dealing with data
+source("./lib/split.R")        # split train and test dataset
+source("./lib/top_n_stocks.R") # get the top-n stocks after prediction
+source("./lib/assist_lib.R")   
+
+#model
+source("./model/baseline.R")
+source("./model/arima.R")
+source("./model/XGboost.R")
+source("./model/prophet.R")
+source("./model/stl_prediction.R")
+
+#result and evaluation of single method
+source("./evaluation/single_top.R")   # get the top n stocks for each single method
+source("./evaluation/single_eva.R") # summary (average rank,average retrun, correct_rate) of each single method and each test date
+source("./evaluation/average_ensemble_top.R")
+source("./evaluation/freq_ensemble_top.R")
+source("./evaluation/ensemble_eva.R")
+source("./evaluation/summary_all_train_test.R")
+
+```
+
+```{r, echo = FALSE, fig.align='center'}
+Stocks_Symbols <- c("AAPL","ADBE", "ADI", "ADP", "ADSK", "AKAM", "ALXN", "AMAT", "AMGN",
+                    "AMZN", "ATVI", "AVGO", "BIIB", "CA", "CELG", "CERN",
+                    "CHRW", "CMCSA", "COST", "CSCO", "CTSH", "CTXS", "DISCA",
+                    "DLTR","EBAY", "EQIX", "ESRX", "EXPD", "EXPE", "FAST", "FB", "FFIV", "FISV", 
+                    "GILD", "GOOG", "GRMN", "HSIC", "ILMN", "INTC", "INTU", "ISRG",
+                    "KLAC","MAR", "MAT", "MNST", "MSFT", "MU", "MYL", 
+                    "NFLX", "NTAP", "NVDA", "ORLY", "PAYX", "PCAR","QCOM","REGN","ROST", 
+                    "SBUX", "SRCL", "STX", "SYMC", "TRIP", "TSCO", "TSLA", "TXN",
+                    "VRSK", "VRTX", "WDC", "WYNN", "XLNX","MMM","AXP","BA",
+                    "CAT","CVX","KO","DIS","XOM","GE","GS","HD",
+                    "IBM", "JNJ","JPM","MCD","MRK","NKE","PFE",
+                    "TRV","UTX","UNH", "VZ","V","WMT")
+```
+
+
+```{r}
+
+textInput("text", label=h2("details of symbol"), value="AAPL")
+
+renderDygraph({
+
+  library(dygraphs)
+  xts_df <- xts_weekly(c(input$text),2010)
+  dygraph(xts_df, main =paste("historical weekly return of",input$text)) %>%
+  dyAxis("y", label = "weekly return") %>%
+  dyRangeSelector(dateWindow = c(min(as.Date(row.names(as.data.frame(xts_df)))),
+                                 max(as.Date(row.names(as.data.frame(xts_df))))))
+})
+
+br()
+```
+
+
+# select symbols
+```{r select-symbol,echo = FALSE, fig.align='center'}
+
+fluidRow(
+  
+  column(2,
+         checkboxGroupInput(
+         inputId = 'symbols',
+         label = '',
+         choices = Stocks_Symbols[1:10],
+         inline   = FALSE)),
+   column(2,
+         checkboxGroupInput(
+         inputId = 'symbols',
+         label = '',
+         choices = Stocks_Symbols[11:20],
+         inline   = FALSE)),
+   column(2,
+         checkboxGroupInput(
+         inputId = 'symbols',
+         label = '',
+         choices = Stocks_Symbols[21:30],
+         inline   = FALSE)),
+   column(2,
+         checkboxGroupInput(
+         inputId = 'symbols',
+         label = '',
+         choices = Stocks_Symbols[31:40],
+         inline   = FALSE)),
+    column(2,
+         checkboxGroupInput(
+         inputId = 'symbols',
+         label = '',
+         choices = Stocks_Symbols[41:50],
+         inline   = FALSE)),
+    column(2,
+         checkboxGroupInput(
+         inputId = 'symbols',
+         label = '',
+         choices = Stocks_Symbols[51:60],
+         inline   = FALSE))
+)
+```
+
+```{r}
+fluidRow(
+  column(9,sliderInput("topn", "THow many stocks do you want to hold?", min=2, max=40,value=5,width = 5000))
+)
+fluidRow(
+  column(9,sliderInput("testnum", "How many weeks do you want to predict?", min=1, max=10,value=4, width = 5000))
+)
+fluidRow(
+  column(9,sliderInput("check", "Which week's result do you want to see", min=1, max=10,value=1, width = 5000))
+)
+```
+
+
+```{r}
+
+renderHighchart({
+   Stocks_Symbols <- as.vector(input$symbols)
+    xts_df <- xts_weekly(Stocks_Symbols,"2010")
+    stock_week <- get_weekly_return(xts_df)
+    m = max(as.integer(str_sub(stock_week$date[which(substr(stock_week$date,1,4)=="2018")],-2,-1)))
+    #n: the number of future unknown weekly return
+    n = input$testnum
+
+    pre <- paste0("2018-W", formatC(m+1, width=2, flag="0"))
+
+    for(i in 2:n){
+      if(m+i >52)
+        {
+          string = "2019-W"
+          j = m + i -52
+        }else{string = "2018-W"
+          j = j = m + i}
+          pre_i <- paste0(string, formatC(j, width=2, flag="0"))
+          pre <- c(pre,pre_i)
+     }
+     test <- data.frame(date = rep(c(pre),each = length(Stocks_Symbols)), symbol = (rep(Stocks_Symbols,n)),return = NA)
+     test$symbol <- as.character(test$symbol)
+     train <- stock_week %>% select(date,symbol,return)
+     topn = input$topn
+
+     arima <- arima_pre(train,test)
+     prophet <- prophet_pre(train,test)
+
+     arima <- arima[c("symbol","date","Prediction")]
+     arima$method = "arima"
+
+     prophet <- prophet[c("symbol","date","Prediction")]
+     prophet$method = "prophet"
+     res <- rbind(as.data.frame(arima),as.data.frame(prophet))
+     res_avg <- res %>% group_by(symbol,date) %>% summarise(Prediction = mean(Prediction)) %>% arrange(date,desc(Prediction))
+
+     top_info <- res_avg %>% group_by(date) %>% top_n(n = topn, wt = Prediction) %>% arrange(date,desc(Prediction))
+     time <- unique(stock_week[c("date","day")])
+     his_df <- merge(train,time,by="date") %>% arrange(symbol,day) %>% filter(symbol %in% unique(top_info$symbol))
+     datev <- unique(top_info$date)
+
+     date.i = input$check
+     top_part <- top_info %>% filter(date == datev[ date.i])%>% arrange(symbol)
+     his_part <- his_df  %>% filter(symbol %in% unique(top_part$symbol))%>% arrange(symbol)
+     his_matrix<- transform(top_part,his_part)
+
+     #corvariance
+     covmat <- cov(his_matrix)
+     # sharp ratio - selected stocks
+     mean_return <- apply(his_matrix,2,mean)
+     gmin.port.orig <- globalMin.portfolio(er = as.matrix(mean_return),cov.mat = covmat)
+     portfolio.return.pre <- mean_return %*% gmin.port.orig$weights
+
+     top_part$weights <- gmin.port.orig$weights
+     colors <- c("#d35400", "#2980b9", "#2ecc71", "#f1c40f", "#2c3e50", "#7f8c8d","#000004", "#3B0F70", "#8C2981", "#DE4968", "#FE9F6D", "#FCFDBF")
+     top_chart <- top_part[c("symbol","Prediction","weights")]
+     top_chart <- setnames(top_chart,c("name","y","z"))
+     top_chart$color <- rep(colors, length.out = topn)
+     library(highcharter)
+     highchart() %>%
+         hc_title(text = "Candidates of portfolio",style = list(fontSize = "15px")) %>%
+         hc_subtitle(text = "the size of bubble: the weight of stocks in portfolio") %>%
+         hc_chart(type = "bubble",polar = FALSE) %>%
+         hc_xAxis(categories = top_chart$name) %>%
+         hc_yAxis(title = list(text = "predicted weekly return of candidates")) %>%
+         hc_add_series(top_chart, showInLegend = FALSE)
+
+})
+```
+
+
